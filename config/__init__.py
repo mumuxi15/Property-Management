@@ -1,1 +1,1 @@
-from .global_var import *
+from .env import cabins, env
