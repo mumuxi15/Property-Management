@@ -5,10 +5,44 @@ import pandas as pd
 import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 import requests
 import json
 from bs4 import BeautifulSoup
 from config import cabins
+
+
+def get_airbnb_neighbor_by_date(checkin, checkout, loc):
+	## 4 adults, location, entire home, hot tub, free parking
+	url = f"https://www.airbnb.com/s/{loc}/homes?checkin={checkin}&checkout={checkout}&adults =4&amenities%5B%5D=9&amenities%5B%5D=25&adults=4&room_types%5B%5D=Entire%20home%2Fapt"
+	response = requests.get(url)
+	soup = BeautifulSoup(response.content, "html.parser")
+	script_tag = soup.find("script", attrs={"data-injector-instances": "true"})
+	price = []
+	if script_tag:
+		# Extract the content of the script tag
+		data = json.loads(script_tag.string)['root > core-guest-spa'][1]
+		for d in data:
+			if isinstance(d, dict):
+				clientdata = d['niobeMinimalClientData']
+				for i in str(clientdata).split("'"):
+					if 'per night' in i:
+						price.append([i])
+	df = pd.DataFrame(price,columns=['txt'])
+	df = df['txt'].str.split(',',expand=True)
+	df.columns = ['price','fullprice']
+	df['price'] = df['price'].str.extract(r'(\d+)')
+	df['fullprice'] = df['fullprice'].str.extract(r'(\d+)') #
+	df['fullprice'] = df['fullprice'].fillna(df['price'])
+	df[['price','fullprice']] = df[['price','fullprice']].apply(pd.to_numeric, errors='coerce')
+	df['discount'] = (df['price']/df['fullprice']).round(2)
+	rs = df.mean(axis=0).round(2)
+	rs['std'] = df['price'].std().round(2)
+	rs['checkin'] = checkin
+	return rs
+
+
+
 
 class PriceAlgo:
 	def __init__(self, cabin):
@@ -20,7 +54,7 @@ class PriceAlgo:
 		today = datetime.today()
 		df = pd.read_excel(path, usecols=['Date', 'Rate', 'Min Nights'])
 		df['Date'] = pd.to_datetime(df['Date'])
-		date_range = pd.date_range(start=df['Date'].min(), end=datetime(df['Date'].max().year, 12, 31))
+		date_range = pd.date_range(start=df['Date'].min(), end=datetime(today.year, 12, 31))
 		df = df.set_index('Date').reindex(date_range)
 		df['Date'] = df.index
 		df['year'] = df['Date'].dt.year
@@ -34,7 +68,6 @@ class PriceAlgo:
 		tb = pd.pivot_table(df, index='dow',columns='time',values='Rate').T[1::]
 		tb = tb.rename(columns=self.day_of_week)
 		tb['year'] = tb.index.year
-
 		years = tb['year'].unique()[1:-1]
 
 		fig = make_subplots(rows=len(years), cols=1)
@@ -46,13 +79,11 @@ class PriceAlgo:
 						  coloraxis=dict(colorscale='sunset'),
 						  coloraxis_colorbar=dict(title="Price Per Night $", title_side="right")
 						  )
-		# Show the figure
 		fig.show()
-	def plot_monthly_rate(self,df):
+	def plot_monthly_rate(self,df): # stacked bar graph
 		gp = df.groupby(['year','month'])['Rate'].mean().reset_index()    #.unstack().T)
-		gp = gp.loc[(gp['year']>2021)&(gp['year']<2025)]
+		gp = gp.loc[(gp['year']>gp['year'].min())&(gp['year']<gp['year'].max())]
 		gp['month'] = gp['month'].map(self.month_in_text)
-
 		fig = px.bar(gp, x="month", y="Rate", color="year", title="Averaged Monthly Rate Per Night of 2022-2024")
 		fig.update_layout(
 			xaxis_title="Month",
@@ -61,24 +92,48 @@ class PriceAlgo:
 		fig.show()
 		return
 
-	def test(self, df):
-		# df = df.dropna(how='any',axis=0)
+	def yearly_dow_prices(self, df):
 		df['year'] = df['Date'].dt.isocalendar().year
 		df['date'] = 'w' + df['Date'].dt.isocalendar().week.astype(str)+'-d' + df['dow'].astype(str)
-		df.to_csv('dates.csv')
-		tb = pd.pivot_table(df, index='date',columns='year',values='Rate')
-		print (tb)
-		tb.to_csv('tmp.csv')
-		# tb.to_csv('tmp.csv')
-		# gp = gp.groupby(['year', 'month','day'])['Rate'].mean().reset_index()  # .unstack().T)
-		# print (gp)
-		# return
+		df_prices = pd.pivot_table(df, index=['week','dow'],columns='year',values='Rate')
+		return df_prices
 
+	def airbnb_scrape(self):
+		today = datetime.today()
+		date_range = pd.date_range(start=today, end=datetime((today + relativedelta(months=3)).year, 12, 31))
+		df = pd.DataFrame(date_range, columns=['date'])
+		df['Date'] = df['date'].dt.date
+		df['week'] = df['date'].dt.isocalendar().week
+		df['dow'] = df['date'].dt.dayofweek
+		df['checkin'] = df['Date']
+		df['checkout'] = df['Date'].shift(-2)
+		df = df.head(60)
+		rs = []
+		for idx, row in df.iterrows():
+			rs.append(get_airbnb_neighbor_by_date(row['checkin'], row['checkout'], self.cabin['location']))
+		rs = pd.concat(rs, axis=1).T
+		df = df.merge(rs, on="checkin")
+		df = df.drop(columns=['date'])
+		df.to_csv(f'data/neighbor_prices_{today}.csv')
+	def add_market_factor(self,df):  # add airbnb data
+		"df: self.yearly_dow_prices "
+		dp = pd.read_csv('data/neighbor_prices.csv',index_col=['week','dow'])
+		# years = df.columns[1::]
+		df = pd.concat([dp,df],axis=1,join='inner')
+		years = df.columns[len(dp.columns)::]
+		df['aveage'] = df[years].mean(axis=1)
+
+
+		# df['average'] =
+		# print (df.head())
 	def run(self):
 		df = self.read_excel(path=self.cabin['spot_rates_sheet'])
+		# print (df)
 		# self.plot_weekly_heatmap(df)
 		# self.plot_monthly_rate(df)
-		self.test(df)
+		df_prices = self.yearly_dow_prices(df)
+		self.add_market_factor(df_prices)
+
 		
 def data_analysis(property=None,loc='Nashville'):
 	df = pd.read_csv('data/nashville_listing.csv', usecols= ['id', 'listing_url', 'scrape_id', 'last_scraped',
@@ -102,32 +157,11 @@ def data_analysis(property=None,loc='Nashville'):
 	print ('length: ',len(df))
 	# print (sorted(df['last_review'].unique()))
 
-def airbnb_scrape():
-	url = "https://www.airbnb.com/s/Gatlinburg--Tennessee--United-States/homes?refinement_paths%5B%5D=%2Fhomes&flexible_trip_lengths%5B%5D=one_week&monthly_start_date=2025-02-01&monthly_length=3&monthly_end_date=2025-05-01&price_filter_input_type=0&channel=EXPLORE&query=Gatlinburg%2C%20TN&place_id=ChIJiaUIy-pTWYgRqHm3fq7XsUo&location_bb=Qg8HaMKm2x9CDsoewqci9w%3D%3D&date_picker_type=calendar&checkin=2025-02-01&checkout=2025-02-04&adults=2&source=structured_search_input_header&search_type=autocomplete_click"
 
-	response = requests.get(url)
-	soup = BeautifulSoup(response.content, "html.parser")
-	script_tag = soup.find("script", attrs={"data-injector-instances": "true"})
-	if script_tag:
-		# Extract the content of the script tag
-		data = json.loads(script_tag.string)['root > core-guest-spa'][1]
-		for d in data:
-			if isinstance(d, dict):
-				clientdata = d['niobeMinimalClientData']
-				print (len(clientdata[1]))
 
-				print (type(clientdata[1]))
 
-# print (scripts)
-	# for i, script in enumerate(soup.find_all('script')):
-	#
-	# 	print (script)
-	# 	print (i, '---'*10)
-	# script_tag = soup.find("script", {"id": "data-deferred-state-0"})
-	# print (soup)
-	# if script_tag:
-	# 	script_content = script_tag.string
-	# 	print(script_content)
+
+
 
 
 
@@ -136,6 +170,5 @@ def airbnb_scrape():
 # bnb_data_analysis(property=hh)
 
 SK = PriceAlgo(cabin = cabins['sky'])
-# SK.run()
+SK.run()
 # data_analysis()
-airbnb_scrape()
