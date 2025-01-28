@@ -31,12 +31,17 @@ class PriceAlgo:
 
     def get_latest_file(self, path):
         file_names = glob.glob(path)
-        print ('file names ',sorted(file_names)[-1])
-
-
+        return sorted(file_names)[-1]
+    def convert_mixed_date(self, date):
+        'ownerrez file contains mixed formats in dates'
+        if isinstance(date, int):
+            return pd.to_datetime('1899-12-30') + pd.to_timedelta(date, unit='D')
+        else:
+            return pd.to_datetime(date, errors='coerce')
     def read_excel(self, path):
         path = self.get_latest_file(path)
         df = pd.read_excel(path, usecols=['Date','Rate','Min Nights'])
+        df['Date'] = df['Date'].apply(self.convert_mixed_date)
         df['Date'] = pd.to_datetime(df['Date'])
         date_range = pd.date_range(start=df['Date'].min(), end=datetime(self.today.year, 12, 31))
         df = df.set_index('Date').reindex(date_range)
@@ -132,7 +137,7 @@ class PriceAlgo:
         df = df.merge(rs, on="checkin")
         df = df.drop(columns=['date'])
         df.to_csv(f'data/scrapy/neighbor_prices_{self.today.date()}.csv')
-        # return df
+        return df
 
     def add_market_factor(self, df, pull_newdata=False):  # add airbnb data
         "df: self.yearly_dow_prices "
@@ -150,17 +155,15 @@ class PriceAlgo:
         df['suggested'] = df['suggested'].round(0)
         ownerez = df[['checkin', 'suggested']].copy()
         ownerez['OwnerRez Property'] = self.cabin['id']
-        ownerez.to_csv('export_rates.csv')
-
-        df.to_csv('tmp.csv')
+        # ownerez.to_csv('export_rates.csv')
+        df.to_csv('export_price_grid.csv')
 
     def run(self):
         df = self.read_excel(path=self.cabin['spot_rates'])
-#       print (df)
         # self.plot_weekly_heatmap(df)
-#       self.plot_monthly_rate(df)
-#       df_prices = self.yearly_dow_prices(df)
-#       self.add_market_factor(df_prices, pull_newdata=False)
+        # self.plot_monthly_rate(df)
+        df_prices = self.yearly_dow_prices(df)
+        self.add_market_factor(df_prices, pull_newdata=True)
 
 
 def data_analysis(property=None, loc='Nashville'):
@@ -191,5 +194,5 @@ def data_analysis(property=None, loc='Nashville'):
 
 
 if __name__ == '__main__':
-    SK = PriceAlgo(cabin=cabins['sky'], period=120)
+    SK = PriceAlgo(cabin=cabins['sky'], period=140)
     SK.run()
