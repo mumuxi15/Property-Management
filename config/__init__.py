@@ -1,1 +1,1 @@
-from .env import cabins, env
+from .env import cabins

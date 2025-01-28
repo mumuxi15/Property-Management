@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, re
 import json
+import glob
 import requests
 import numpy as np
 import pandas as pd
@@ -28,7 +29,13 @@ class PriceAlgo:
         self.period = period
         return
 
+    def get_latest_file(self, path):
+        file_names = glob.glob(path)
+        print ('file names ',sorted(file_names)[-1])
+
+
     def read_excel(self, path):
+        path = self.get_latest_file(path)
         df = pd.read_excel(path, usecols=['Date','Rate','Min Nights'])
         df['Date'] = pd.to_datetime(df['Date'])
         date_range = pd.date_range(start=df['Date'].min(), end=datetime(self.today.year, 12, 31))
@@ -47,6 +54,7 @@ class PriceAlgo:
         tb = tb.rename(columns=self.day_of_week)
         tb['year'] = tb.index.year
         years = tb['year'].unique()[1:-1]
+        print (df)
 
         fig = make_subplots(rows=len(years), cols=1)
         for i, yr in enumerate(years):
@@ -147,12 +155,12 @@ class PriceAlgo:
         df.to_csv('tmp.csv')
 
     def run(self):
-        df = self.read_excel(path=self.cabin['spot_rates_sheet'])
-        # print (df)
+        df = self.read_excel(path=self.cabin['spot_rates'])
+#       print (df)
         # self.plot_weekly_heatmap(df)
-        # self.plot_monthly_rate(df)
-        df_prices = self.yearly_dow_prices(df)
-        self.add_market_factor(df_prices, pull_newdata=False)
+#       self.plot_monthly_rate(df)
+#       df_prices = self.yearly_dow_prices(df)
+#       self.add_market_factor(df_prices, pull_newdata=False)
 
 
 def data_analysis(property=None, loc='Nashville'):
@@ -182,7 +190,6 @@ def data_analysis(property=None, loc='Nashville'):
 
 
 
-# bnb_data_analysis(property=hh)
 if __name__ == '__main__':
     SK = PriceAlgo(cabin=cabins['sky'], period=120)
     SK.run()
