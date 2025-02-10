@@ -10,9 +10,7 @@ from plotly.subplots import make_subplots
 from dateutil.relativedelta import relativedelta
 from datetime import datetime
 from bs4 import BeautifulSoup
-
-from multiprocessing import Pool, freeze_support
-
+from multiprocessing import Pool
 from config import cabins
 
 
@@ -110,7 +108,12 @@ class PriceAlgo:
             raise Exception('Please check the website scraping format, airbnb might have changed the format')
         df = pd.DataFrame(price, columns=['txt'])
         df = df['txt'].str.split(',', expand=True)
-        df.columns = ['neighbor_rate', 'neighbor_udp']  # neighbor un-discount price
+        if len(df.columns) == 2:
+            df.columns = ['neighbor_rate', 'neighbor_udp']  # neighbor un-discount price
+        else:
+            df.columns = ['neighbor_rate']
+            df['neighbor_udp'] = df['neighbor_rate']
+
         df['neighbor_rate'] = df['neighbor_rate'].str.extract(r'(\d+)')
         df['neighbor_udp'] = df['neighbor_udp'].str.extract(r'(\d+)')  #
         df['neighbor_udp'] = df['neighbor_udp'].fillna(df['neighbor_rate'])
@@ -139,12 +142,16 @@ class PriceAlgo:
         df.to_csv(f'data/scrapy/neighbor_prices_{self.today.date()}.csv')
         return df
 
-    def add_market_factor(self, df, pull_newdata=False):  # add airbnb data
-        "df: self.yearly_dow_prices "
-        #
-        if pull_newdata:
+    def calculate_market_factor(self, pull_data=True):
+        if pull_data:
             dp = self.airbnb_scrape()  # scrape
-        dp = pd.read_csv('data/scrapy/' + sorted(os.listdir('data/scrapy/'))[-1], index_col=['week', 'dow'])
+        else:
+            dp = pd.read_csv('data/scrapy/' + sorted(os.listdir('data/scrapy/'))[-1], index_col=['week', 'dow'])
+        return dp
+
+    def add_market_factor(self, df):  # add airbnb data
+        "df: self.yearly_dow_prices "
+        dp = self.calculate_market_factor()
         df = pd.concat([dp, df], axis=1, join='inner')
         years = df.columns[len(dp.columns)::]
         df['suggested'] = (df['neighbor_rate'] + self.cabin['z-score'] * df['std'])  # 1std
@@ -159,11 +166,12 @@ class PriceAlgo:
         df.to_csv('export_price_grid.csv')
 
     def run(self):
-        df = self.read_excel(path=self.cabin['spot_rates'])
+        # df = self.read_excel(path=self.cabin['spot_rates'])
         # self.plot_weekly_heatmap(df)
         # self.plot_monthly_rate(df)
-        df_prices = self.yearly_dow_prices(df)
-        self.add_market_factor(df_prices, pull_newdata=True)
+        # df_prices = self.yearly_dow_prices(df)
+        self.calculate_market_factor()
+        # self.add_market_factor(df_prices, pull_newdata=True)
 
 
 def data_analysis(property=None, loc='Nashville'):
@@ -194,5 +202,8 @@ def data_analysis(property=None, loc='Nashville'):
 
 
 if __name__ == '__main__':
-    SK = PriceAlgo(cabin=cabins['sky'], period=140)
-    SK.run()
+    # SK = PriceAlgo(cabin=cabins['sky'], period=140)
+    # SK.run()
+
+    HH = PriceAlgo(cabin=cabins['hh'], period=130)
+    HH.run()
