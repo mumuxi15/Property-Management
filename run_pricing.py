@@ -15,8 +15,6 @@ from config import cabins
 
 
 
-
-
 class PriceAlgo:
     def __init__(self, cabin, period):
         self.cabin = cabin
@@ -30,12 +28,14 @@ class PriceAlgo:
     def get_latest_file(self, path):
         file_names = glob.glob(path)
         return sorted(file_names)[-1]
+    
     def convert_mixed_date(self, date):
         'ownerrez file contains mixed formats in dates'
         if isinstance(date, int):
             return pd.to_datetime('1899-12-30') + pd.to_timedelta(date, unit='D')
         else:
             return pd.to_datetime(date, errors='coerce')
+        
     def read_excel(self, path):
         path = self.get_latest_file(path)
         df = pd.read_excel(path, usecols=['Date','Rate','Min Nights'])
@@ -57,8 +57,6 @@ class PriceAlgo:
         tb = tb.rename(columns=self.day_of_week)
         tb['year'] = tb.index.year
         years = tb['year'].unique()[1:-1]
-        print (df)
-
         fig = make_subplots(rows=len(years), cols=1)
         for i, yr in enumerate(years):
             data = tb.loc[tb['year'] == yr][list(self.day_of_week.values())].T
@@ -82,11 +80,10 @@ class PriceAlgo:
         fig.show()
         return
 
-    def yearly_dow_prices(self, df):
+    def weekly_grid(self, df):
         df['year'] = df['Date'].dt.isocalendar().year
         df['date'] = 'w' + df['Date'].dt.isocalendar().week.astype(str) + '-d' + df['dow'].astype(str)
-        df_prices = pd.pivot_table(df, index=['week', 'dow'], columns='year', values='Rate')
-        return df_prices
+        return pd.pivot_table(df, index=['week', 'dow'], columns='year', values='Rate')
 
     def get_neighbor_by_date(self, dates):
         """ search condition : 4 adults, location, entire home, hot tub, free parking"""
@@ -124,8 +121,13 @@ class PriceAlgo:
         rs['std'] = df['neighbor_rate'].std().round(2)
         rs['checkin'] = checkin
         return rs
+    
     def airbnb_scrape(self):
-        date_range = pd.date_range(start=self.today, end=datetime((self.today + relativedelta(months=3)).year, 12, 31))
+        startdate = self.today
+        enddate = datetime((self.today + relativedelta(months=3)).year, 12, 31)
+#       startdate = datetime(2025, 7, 17)
+#       enddate = datetime((self.today + relativedelta(months=6)).year, 12, 31)
+        date_range = pd.date_range(start=startdate, end=enddate)
         df = pd.DataFrame(date_range, columns=['date'])
         df['Date'] = df['date'].dt.date
         df['week'] = df['date'].dt.isocalendar().week
@@ -133,25 +135,26 @@ class PriceAlgo:
         df['checkin'] = df['Date'].astype(str)
         df['checkout'] = df['Date'].shift(-2).astype(str)
         df = df.head(self.period)
+        
         args = df[['checkin','checkout']].values.tolist()
         with Pool(processes=5) as pool:
             rs= pool.map(self.get_neighbor_by_date, args)
         rs = pd.concat(rs, axis=1).T
         df = df.merge(rs, on="checkin")
-        df = df.drop(columns=['date'])
+        df = df.drop(columns=['checkout'])
         df.to_csv(f'data/scrapy/neighbor_prices_{self.today.date()}.csv')
         return df
 
-    def calculate_market_factor(self, pull_data=True):
-        if pull_data:
+    def calculate_market_factor(self, update=False):
+        if update:
             dp = self.airbnb_scrape()  # scrape
         else:
             dp = pd.read_csv('data/scrapy/' + sorted(os.listdir('data/scrapy/'))[-1], index_col=['week', 'dow'])
         return dp
 
-    def add_market_factor(self, df):  # add airbnb data
+    def add_market_factor(self, df, update=False):  # add airbnb data
         "df: self.yearly_dow_prices "
-        dp = self.calculate_market_factor()
+        dp = self.calculate_market_factor(update)
         df = pd.concat([dp, df], axis=1, join='inner')
         years = df.columns[len(dp.columns)::]
         df['suggested'] = (df['neighbor_rate'] + self.cabin['z-score'] * df['std'])  # 1std
@@ -159,19 +162,20 @@ class PriceAlgo:
         df = df.reset_index()
         print (df.loc[(df['week']<=df['week'].min()+1)& (df['dow']<4)] )
         df.loc[(df['week']<=df['week'].min()+1)& (df['dow']<4),'suggested'] *= 0.9 # discount on weekdays of first week
-        df['suggested'] = df['suggested'].round(0)
-        ownerez = df[['checkin', 'suggested']].copy()
-        ownerez['OwnerRez Property'] = self.cabin['id']
+        df['suggested'] = (df['suggested']//5*5).astype(int)
+        print (df)
+#       ownerez = df[['checkin', 'suggested']].copy()
+#       ownerez['OwnerRez Property'] = self.cabin['id']
         # ownerez.to_csv('export_rates.csv')
         df.to_csv('export_price_grid.csv')
 
     def run(self):
-        # df = self.read_excel(path=self.cabin['spot_rates'])
-        # self.plot_weekly_heatmap(df)
-        # self.plot_monthly_rate(df)
-        # df_prices = self.yearly_dow_prices(df)
-        self.calculate_market_factor()
-        # self.add_market_factor(df_prices, pull_newdata=True)
+        df = self.read_excel(path=self.cabin['spot_rates'])
+#       self.plot_weekly_heatmap(df)
+#       self.plot_monthly_rate(df)
+        df_grid = self.weekly_grid(df)
+#       self.calculate_market_factor(update=True)
+        self.add_market_factor(df_grid, update=False)
 
 
 def data_analysis(property=None, loc='Nashville'):
@@ -202,8 +206,9 @@ def data_analysis(property=None, loc='Nashville'):
 
 
 if __name__ == '__main__':
-    # SK = PriceAlgo(cabin=cabins['sky'], period=140)
-    # SK.run()
+  SK = PriceAlgo(cabin=cabins['sky'], period=140)
+  SK.run()
 
-    HH = PriceAlgo(cabin=cabins['hh'], period=130)
-    HH.run()
+#   HH = PriceAlgo(cabin=cabins['hh'], period=130)
+#   HH.run()
+  
